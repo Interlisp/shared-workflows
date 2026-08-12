@@ -1,0 +1,228 @@
+#*******************************************************************************
+#  build-site.yml
+#
+#  Reusable GitHub Workflow that builds the Interlisp.org website.
+#
+#  This workflow is shared by every repository that builds or deploys the
+#  website.  It contains the complete build pipeline so that no build logic
+#  is duplicated across repositories and updates take effect everywhere at
+#  once:
+#
+#    - Zotero bibliography version check and caching
+#    - Hugo Extended compilation
+#    - Node.js / PostCSS dependency installation
+#    - Optional skip of the build when the bibliography cache is fresh
+#      (used for scheduled runs so no-op nightly rebuilds are avoided)
+#    - Optional test suite (content-integrity, JSON-LD, and build-integrity)
+#    - Optional GitHub Pages artifact upload
+#
+#  Callers:
+#    - Interlisp.github.io  (production deploy, per-PR preview triggers)
+#    - interlisp.staging    (per-PR preview deploys)
+#
+#  The workflow is stored in the organization's `.github` repository so that
+#  it is available to every repository in the Interlisp organization.
+#
+#  Copyright 2026 by Interlisp.org
+#
+# ******************************************************************************
+name: Build Site
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        description: >-
+          Repository to check out (OWNER/REPO).  Defaults to the repository
+          that called this workflow.
+        required: false
+        default: ''
+        type: string
+      ref:
+        description: >-
+          Git ref (branch, tag, or SHA) to check out before building.
+          Defaults to the ref that triggered the calling workflow.
+        required: false
+        default: ''
+        type: string
+      hugo-version:
+        description: >-
+          Hugo version to install.  The caller exposes it from its workflow
+          environment as a job output.
+        required: true
+        type: string
+      hugo-environment:
+        description: >-
+          Hugo environment to build (development, staging, production).
+        required: true
+        type: string
+      base-url:
+        description: >-
+          Override the site baseURL.  Used for per-PR preview subdirectories,
+          e.g. https://interlisp.github.io/interlisp.staging/pr-123/
+        required: false
+        default: ''
+        type: string
+      upload-artifact:
+        description: >-
+          Upload the built site (./public) as a GitHub Pages artifact so the
+          caller can deploy it.
+        required: false
+        default: true
+        type: boolean
+      run-build-tests:
+        description: >-
+          Run the site test suites (content-integrity, JSON-LD, and
+          build-integrity) after building.
+        required: false
+        default: true
+        type: boolean
+      skip-if-fresh:
+        description: >-
+          When true and the Zotero bibliography cache is already fresh, skip
+          the build, tests, and artifact upload.  Used by the production
+          workflow on scheduled runs to avoid no-op nightly rebuilds.  The
+          ``skipped`` output tells the caller whether the build was skipped.
+        required: false
+        default: false
+        type: boolean
+
+    outputs:
+      skipped:
+        description: >-
+          True when the build was skipped because ``skip-if-fresh`` was set
+          and the Zotero bibliography cache was already up to date.
+        value: ${{ jobs.build.outputs.skipped }}
+
+env:
+  TZ: America/New_York
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      skipped: ${{ steps.skip-check.outputs.skip }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ inputs.repository || github.repository }}
+          ref: ${{ inputs.ref || '' }}
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Get Zotero Version Information
+        id: zoteroVersion
+        run: |
+          set -euo pipefail
+          VERSION=$(curl -fsSLI "https://api.zotero.org/groups/2914042/items?format=versions" \
+            | { grep -i "last-modified-version" \
+                | cut -d: -f2 \
+                | tr -d $'\r ' || true; })
+          if [[ -z "${VERSION:-}" ]]; then
+            echo "Error: Failed to determine Zotero Last-Modified-Version from API response." >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Zotero Bibliography
+        id: cache-bib
+        uses: actions/cache@v5
+        with:
+          path: |
+            static/data/bibliography.json
+            static/data/bibItems
+            content/en/history/bibliography
+          key: bib-${{ steps.zoteroVersion.outputs.version }}
+
+      - name: Install Bibliography
+        if: steps.cache-bib.outputs.cache-hit != 'true'
+        run: |
+          echo "Retrieve bibliography"
+          cd scripts
+          chmod +x ./update_bibliography.sh
+          chmod +x ./bibSplit.pl
+          ./update_bibliography.sh
+
+      - name: Determine whether to skip build
+        id: skip-check
+        env:
+          SKIP_IF_FRESH: ${{ inputs.skip-if-fresh }}
+          CACHE_HIT: ${{ steps.cache-bib.outputs.cache-hit }}
+        run: |
+          if [[ "$SKIP_IF_FRESH" == "true" && "$CACHE_HIT" == "true" ]]; then
+            echo "Skipping build: bibliography cache is fresh"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Hugo CLI
+        if: steps.skip-check.outputs.skip != 'true'
+        run: |
+          wget -O ${{ runner.temp }}/hugo.deb https://github.com/gohugoio/hugo/releases/download/v${{ inputs.hugo-version }}/hugo_extended_${{ inputs.hugo-version }}_linux-amd64.deb \
+          && sudo dpkg -i ${{ runner.temp }}/hugo.deb
+
+      - name: Setup Pages
+        if: steps.skip-check.outputs.skip != 'true'
+        id: pages
+        uses: actions/configure-pages@v6.0.0
+
+      - name: Setup Node
+        if: steps.skip-check.outputs.skip != 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: 'npm'
+
+      - name: Install Node dependencies
+        if: steps.skip-check.outputs.skip != 'true'
+        run: npm ci
+
+      - name: Build site
+        if: steps.skip-check.outputs.skip != 'true'
+        env:
+          HUGO_CACHEDIR: ${{ runner.temp }}/hugo_cache
+        run: |
+          ARGS=(--cleanDestinationDir -e "${{ inputs.hugo-environment }}")
+          if [[ -n "${{ inputs.base-url }}" ]]; then
+            ARGS+=(--baseURL "${{ inputs.base-url }}")
+          fi
+          hugo "${ARGS[@]}"
+
+      - name: Install pytest
+        if: inputs.run-build-tests == true && steps.skip-check.outputs.skip != 'true'
+        run: pip install pytest pyyaml pytest-cov
+
+      - name: Build test site
+        if: inputs.run-build-tests == true && steps.skip-check.outputs.skip != 'true'
+        env:
+          HUGO_CACHEDIR: ${{ runner.temp }}/hugo_cache
+        run: hugo --environment testing --destination tests/public_test
+
+      - name: Run content-integrity tests
+        if: inputs.run-build-tests == true && steps.skip-check.outputs.skip != 'true'
+        run: pytest tests/test_content_integrity.py -v --cov-report=term-missing
+
+      - name: Run JSON-LD tests
+        if: inputs.run-build-tests == true && steps.skip-check.outputs.skip != 'true'
+        run: pytest tests/test_bibliography_jsonld.py -v
+
+      - name: Run build-integrity tests
+        if: inputs.run-build-tests == true && steps.skip-check.outputs.skip != 'true'
+        run: pytest tests/test_hugo_build.py -v
+
+      - name: Upload artifact
+        if: inputs.upload-artifact == true && steps.skip-check.outputs.skip != 'true'
+        uses: actions/upload-pages-artifact@v5.0.0
+        with:
+          path: ./public
