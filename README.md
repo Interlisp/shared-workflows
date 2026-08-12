@@ -44,5 +44,6 @@ jobs:
       hugo-environment: production
 ```
 
-Reusable workflows must be referenced on the **default branch** (`main`) or a
-tag — not a non-default branch.
+Reusable workflows can be referenced by **branch, tag, or SHA**. For
+stability, pin to the **default branch** (`main`) or a tag once the workflow
+is merged; a branch ref is fine during development.
