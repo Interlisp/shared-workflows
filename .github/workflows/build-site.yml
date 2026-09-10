@@ -134,6 +134,9 @@ jobs:
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      # Exclude non-generated files from the cache. 
+      # This ensures changes to these files are always
+      # picked up when the website is rebuilt.
       - name: Cache Zotero Bibliography
         id: cache-bib
         uses: actions/cache@v5
@@ -142,6 +145,8 @@ jobs:
             static/data/bibliography.json
             static/data/bibItems
             content/en/history/bibliography
+            !content/en/history/bibliography/_index.md
+            !content/en/history/bibliography/intake
           key: bib-${{ steps.zoteroVersion.outputs.version }}
 
       - name: Install Bibliography
