@@ -120,6 +120,11 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      - name: Get commit hash
+        id: commitSha
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Get Zotero Version Information
         id: zoteroVersion
         run: |
@@ -137,9 +142,9 @@ jobs:
       # Exclude non-generated files from the cache.
       # This ensures changes to these files are always
       # picked up when the website is rebuilt.
-      # Cache key includes the Zotero version plus a hash of the
-      # bibliography generator scripts, so either a Zotero update or a
-      # script fix invalidates the cache.
+      # Cache key is the Zotero version plus the checked-out commit SHA,
+      # so any code change regenerates the cache. Deliberately aggressive:
+      # prefer extra rebuilds over any risk of a stale cache.
       - name: Cache Zotero Bibliography
         id: cache-bib
         uses: actions/cache@v6
@@ -150,7 +155,7 @@ jobs:
             content/en/history/bibliography
             !content/en/history/bibliography/_index.md
             !content/en/history/bibliography/intake
-          key: bib-${{ steps.zoteroVersion.outputs.version }}-${{ hashFiles('scripts/update_bibliography.sh', 'scripts/bibSplit.pl') }}
+          key: bib-${{ steps.zoteroVersion.outputs.version }}-${{ steps.commitSha.outputs.sha }}
 
       - name: Install Bibliography
         if: steps.cache-bib.outputs.cache-hit != 'true'
