@@ -191,19 +191,19 @@ jobs:
             exit 1
           fi
           DEB="hugo_extended_${HUGO_VERSION_INPUT}_linux-amd64.deb"
+          SUM="hugo_${HUGO_VERSION_INPUT}_checksums.txt"
           BASE_URL="https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION_INPUT}"
-          TMP_DEB="${{ runner.temp }}/hugo.deb"
-          TMP_SUM="${{ runner.temp }}/hugo_checksums.txt"
-          rm -f "$TMP_DEB" "$TMP_SUM"
+          TMP_DIR="${{ runner.temp }}"
+          rm -f "${TMP_DIR}/${DEB}" "${TMP_DIR}/${SUM}"
           echo "Downloading Hugo v${HUGO_VERSION_INPUT} (extended, linux-amd64)..."
           wget --retry-connrefused --waitretry=5 --read-timeout=30 --timeout=30 --tries=5 \
-            -O "$TMP_DEB" "${BASE_URL}/${DEB}"
+            -O "${TMP_DIR}/${DEB}" "${BASE_URL}/${DEB}"
           wget --retry-connrefused --waitretry=5 --read-timeout=30 --timeout=30 --tries=5 \
-            -O "$TMP_SUM" "${BASE_URL}/hugo_${HUGO_VERSION_INPUT}_checksums.txt"
+            -O "${TMP_DIR}/${SUM}" "${BASE_URL}/${SUM}"
           echo "Verifying SHA256 checksum for ${DEB}..."
-          ( cd "$(dirname "$TMP_DEB")" && grep -F " ${DEB}" "$(basename "$TMP_SUM")" | sha256sum -c - )
-          sudo dpkg -i "$TMP_DEB"
-          rm -f "$TMP_DEB" "$TMP_SUM"
+          ( cd "${TMP_DIR}" && grep -F " ${DEB}" "${SUM}" | sha256sum -c - )
+          sudo dpkg -i "${TMP_DIR}/${DEB}"
+          rm -f "${TMP_DIR}/${DEB}" "${TMP_DIR}/${SUM}"
           echo "Installed:"
           hugo version
           hugo version | grep -q "+extended" || { echo "::error::Hugo extended edition required"; exit 1; }
