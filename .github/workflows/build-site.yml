@@ -181,9 +181,33 @@ jobs:
 
       - name: Install Hugo CLI
         if: steps.skip-check.outputs.skip != 'true'
+        env:
+          HUGO_VERSION_INPUT: ${{ inputs.hugo-version }}
         run: |
-          wget -O ${{ runner.temp }}/hugo.deb https://github.com/gohugoio/hugo/releases/download/v${{ inputs.hugo-version }}/hugo_extended_${{ inputs.hugo-version }}_linux-amd64.deb \
-          && sudo dpkg -i ${{ runner.temp }}/hugo.deb
+          set -euo pipefail
+          # Strictly pinned: require exact semver (e.g. 0.158.0), no 'latest'/ranges.
+          if [[ ! "$HUGO_VERSION_INPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::inputs.hugo-version must be pinned semver (got '$HUGO_VERSION_INPUT')"
+            exit 1
+          fi
+          DEB="hugo_extended_${HUGO_VERSION_INPUT}_linux-amd64.deb"
+          BASE_URL="https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION_INPUT}"
+          TMP_DEB="${{ runner.temp }}/hugo.deb"
+          TMP_SUM="${{ runner.temp }}/hugo_checksums.txt"
+          rm -f "$TMP_DEB" "$TMP_SUM"
+          echo "Downloading Hugo v${HUGO_VERSION_INPUT} (extended, linux-amd64)..."
+          wget --retry-connrefused --waitretry=5 --read-timeout=30 --timeout=30 --tries=5 \
+            -O "$TMP_DEB" "${BASE_URL}/${DEB}"
+          wget --retry-connrefused --waitretry=5 --read-timeout=30 --timeout=30 --tries=5 \
+            -O "$TMP_SUM" "${BASE_URL}/hugo_${HUGO_VERSION_INPUT}_checksums.txt"
+          echo "Verifying SHA256 checksum for ${DEB}..."
+          ( cd "$(dirname "$TMP_DEB")" && grep -F " ${DEB}" "$(basename "$TMP_SUM")" | sha256sum -c - )
+          sudo dpkg -i "$TMP_DEB"
+          rm -f "$TMP_DEB" "$TMP_SUM"
+          echo "Installed:"
+          hugo version
+          hugo version | grep -q "+extended" || { echo "::error::Hugo extended edition required"; exit 1; }
+          hugo version | grep -q "v${HUGO_VERSION_INPUT}" || { echo "::error::Hugo version mismatch (expected v${HUGO_VERSION_INPUT})"; exit 1; }
 
       - name: Setup Pages
         if: steps.skip-check.outputs.skip != 'true'
