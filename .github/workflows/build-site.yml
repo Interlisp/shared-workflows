@@ -225,6 +225,26 @@ jobs:
         if: steps.skip-check.outputs.skip != 'true'
         run: npm ci
 
+      # Hugo resolves Dart Sass from PATH, not from node_modules, so a site
+      # that compiles SCSS with sass-embedded needs `sass` visible to the
+      # Hugo binary installed above.  Expose exactly one name (`sass`) from a
+      # scratch directory so this cannot shadow or replace the version-checked
+      # Hugo, and skip entirely when the site installs no Sass binary, leaving
+      # this a no-op for callers that do not need it.
+      - name: Expose Dart Sass on PATH
+        if: steps.skip-check.outputs.skip != 'true'
+        run: |
+          SASS_BIN="node_modules/.bin/sass"
+          if [[ ! -e "$SASS_BIN" ]]; then
+            echo "No $SASS_BIN; nothing to expose."
+            exit 0
+          fi
+          SCRATCH="${RUNNER_TEMP}/npm-bin"
+          mkdir -p "$SCRATCH"
+          ln -sf "$PWD/$SASS_BIN" "$SCRATCH/sass"
+          echo "$SCRATCH" >> "$GITHUB_PATH"
+          echo "Exposed $SCRATCH/sass -> $(readlink -f "$SASS_BIN")"
+
       - name: Build site
         if: steps.skip-check.outputs.skip != 'true'
         env:
